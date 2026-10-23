@@ -4,6 +4,14 @@ Mod versions are in `mod/Bridge.cs` (`Version`). The server checks the mod's ver
 where it can, so a newer server works with an older mod.
 
 ## Unreleased
+- Design queue (server only, `server/cola.py`, test `server/test_cola.py`): stage several road designs that already preview clean and build them with one call.
+  `cs2_queue_add` dry-runs a design with `auto_fix` and stores the cleaned segments (plus an optional zoning spec and optional `demolish` boxes) in
+  `~/cs2mcp-queue/queue.json` (`$CS2MCP_QUEUE_DIR`); it drops segments that cross or overlap a design already staged and refuses a design that would be
+  built as an island (`allow_island` overrides). `cs2_queue_add_batch` stages every `<prefix><n>_segments.json` of a folder, `cs2_queue_list` and
+  `cs2_queue_remove` manage the queue, and `cs2_queue_commit` builds it: pauses the game, then per design builds chunks of <= `chunk` (100) segments
+  (hold with `auto_fix`, then commit), demolishes the buildings in its `demolish` boxes first, checks for road islands, applies its zoning, and stops at the
+  first failure; finished designs leave the queue. `cs2_place_roads` gained `return_segments` (the cleaned draft as `segments_kept`) and `auto_fix_ignore`
+  (boxes whose errors do not count, used with `demolish`).
 - `cs2_place_roads auto_fix`: a preview with errors is fixed by the server — draft segments within
   `auto_fix_radius` (12 m) of an error position are dropped and the preview is redone, up to `auto_fix_rounds` (4) times — so the caller only
   sees a clean preview. The result reports `auto_fix` (rounds, dropped segments, groups left unconnected to the existing network); a held

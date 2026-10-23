@@ -82,13 +82,18 @@ def islands(rpc, segs):
     return out
 
 
-def run(rpc, segs, params, res, max_rounds=4, radius=RADIUS):
+def run(rpc, segs, params, res, max_rounds=4, radius=RADIUS, ignore=None):
     """Re-preview `segs` without the segments that hit errors. `params` are the place_roads params of the first call
     (without segments); `res` its result. Returns (segs, res, report). A held preview that still has errors is cancelled."""
     hold = bool(params.get("hold"))
-    dropped, rounds = [], 0
+    dropped, rounds, only_ignored = [], 0, False
     while res.get("errors") and rounds < max_rounds and segs:
         locs = [tuple(l["pos"]) for l in (res.get("error_locations") or []) if l.get("pos")]
+        if ignore:                                          # errors inside a box that will be demolished first are not a reason to drop
+            locs = [p for p in locs if not any(b["xmin"] <= p[0] <= b["xmax"] and b["zmin"] <= p[1] <= b["zmax"] for b in ignore)]
+            if not locs:
+                only_ignored = True
+                break
         if not locs: break
         kept, gone = drop_near(segs, locs, radius)
         if not gone: break                                  # the errors are not on any draft segment (nothing to drop)
@@ -100,12 +105,13 @@ def run(rpc, segs, params, res, max_rounds=4, radius=RADIUS):
         segs = kept
         if not segs: break
         res = rpc("place_roads", dict(params, segments=segs))
-    clean = bool(segs) and not res.get("errors")
+    clean = bool(segs) and (not res.get("errors") or only_ignored)
     if hold and not clean:
         try: rpc("preview_cancel")                           # never leave a preview with errors on screen
         except Exception: pass
         res = dict(res, held=False)
     report = {"rounds": rounds, "dropped_segments": len(dropped), "kept_segments": len(segs), "clean": clean}
+    if only_ignored: report["errors_in_demolish_boxes"] = res.get("errors")
     if dropped: report["dropped_examples"] = [{"start": s["start"], "end": s["end"]} for s in dropped[:12]]
     if not clean:
         report["remaining_errors"] = res.get("errors", 0)
