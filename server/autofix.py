@@ -60,7 +60,7 @@ def _existing_polylines(rpc, segs):
     return [survey.polyline(e["curve"], 12) for e in net["edges"] if "flow" in e]
 
 
-def islands(rpc, segs):
+def islands(rpc, segs, members=False):
     """groups of the draft that touch no existing road: [{segments, near: [x, z]}]. The biggest group is never reported
     unless it too touches nothing (a draft in the open that connects to nothing)."""
     if not segs: return []
@@ -78,7 +78,7 @@ def islands(rpc, segs):
         ends = [p for i in g for p in (segs[i]["start"], segs[i]["end"])]
         if not any(touches(p) for p in ends):
             mx = sum(p[0] for p in ends) / len(ends); mz = sum(p[1] for p in ends) / len(ends)
-            out.append({"segments": len(g), "near": [round(mx), round(mz)]})
+            out.append({"segments": len(g), "near": [round(mx), round(mz)], **({"indices": g} if members else {})})
     return out
 
 

@@ -16,7 +16,7 @@ grid = lambda x0, z0, n: [S((x0 + 80 * i, z0), (x0 + 80 * (i + 1), z0)) for i in
 def fake_place(a):
     assert a["dry_run"] and a["return_segments"]
     segs = a["segments"]
-    return {"errors": 0, "segments_kept": segs, "auto_fix": {"dropped_segments": 1, "kept_segments": len(segs), "clean": True}}
+    return {"errors": 0, "segments_kept": segs, "auto_fix": {"dropped_segments": 0, "kept_segments": len(segs), "clean": True}}
 
 r = cola.add({"name": "uno", "segments": grid(0, 0, 4), "zone": {"zone_type": "NA Residential Low"}}, fake_place)
 assert r["segments"] == 4 and r["dropped_for_conflict_with_queue"] == 0
@@ -46,4 +46,31 @@ cola.add({"name": "malo", "segments": grid(0, 900, 3)}, fake_place)
 bad = lambda a: {"held": False, "auto_fix": {"clean": False}}
 out = cola.commit({"pause_s": 0}, fake_rpc, bad, fake_zone, fake_inspect)
 assert out["built"] == [] and out["kept_in_queue"] == ["malo"] and not out["designs"][0]["complete"]
+
+# --- trimming instead of refusing (min_keep 0.8): a good design with a few loose pieces is staged without them
+import autofix
+cola.save([])
+def isl_place(a):
+    segs = a["segments"]
+    return {"errors": 0, "segments_kept": segs, "auto_fix": {"dropped_segments": 1, "kept_segments": len(segs), "clean": True,
+            "unconnected_groups": [{"segments": 1, "near": [0, 0]}]}}
+real_islands = autofix.islands
+autofix.islands = lambda rpc, segs, members=False: [{"segments": 1, "near": [0, 0], "indices": [len(segs) - 1]}] if members else [{"segments": 1, "near": [0, 0]}]
+r = cola.add({"name": "casi", "segments": grid(0, 0, 9)}, isl_place, rpc=lambda *a, **k: {})
+assert r["segments"] == 8 and r["auto_fix"]["dropped_island_segments"] == 1 and "unconnected_groups" not in r["auto_fix"], r      # 8 of 10 sent = 80 %
+# too much loose: refused
+autofix.islands = lambda rpc, segs, members=False: [{"segments": 4, "near": [0, 0], "indices": [0, 1, 2, 3]}] if members else [{"segments": 4, "near": [0, 0]}]
+try: cola.add({"name": "suelto", "segments": grid(0, 600, 5)}, isl_place, rpc=lambda *a, **k: {}); assert False
+except ValueError as e: assert "island" in str(e)
+# ... unless the caller lowers min_keep
+r = cola.add({"name": "suelto", "segments": grid(0, 600, 5), "min_keep": 0.1}, isl_place, rpc=lambda *a, **k: {})
+assert r["segments"] == 1, r
+# heavy trim by auto_fix alone is refused too
+def heavy(a): return {"errors": 0, "segments_kept": a["segments"][:3], "auto_fix": {"dropped_segments": 6, "kept_segments": 3, "clean": True}}
+try: cola.add({"name": "pesado", "segments": grid(0, 900, 9)}, heavy); assert False
+except ValueError as e: assert "too much" in str(e)
+r = cola.add({"name": "pesado", "segments": grid(0, 900, 9), "allow_heavy_trim": True}, heavy)
+assert r["segments"] == 3
+autofix.islands = real_islands
+cola.save([])
 print("ok")

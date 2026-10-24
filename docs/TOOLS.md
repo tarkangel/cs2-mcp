@@ -1855,7 +1855,9 @@ Stage a road design WITHOUT building it: previews it as a dry_run with auto_fix 
 | `note` | string |  |
 | `replace` | boolean | overwrite a design with the same name |
 | `demolish_file` | string | JSON file with demolish boxes |
-| `allow_island` | boolean | stage even if auto_fix leaves a group that touches no existing road (default: refused) |
+| `allow_island` | boolean | stage even if auto_fix leaves a group that touches no existing road (default: the loose groups are trimmed) |
+| `min_keep` | number | share of the segments sent that must survive trimming errors and loose groups (default 0.8); below it the design is refused |
+| `allow_heavy_trim` | boolean | stage even if more than 1-min_keep of the segments had to be trimmed |
 | `demolish` | object[] | boxes [{xmin,zmin,xmax,zmax}] whose buildings are demolished at commit time (roads untouched); preview errors inside them are ignored when staging |
 
 ### `cs2_queue_add_batch`
@@ -1870,6 +1872,9 @@ Stage many designs at once: every <prefix><n>_segments.json in `dir` (with an op
 | `zone` | object | {zone_type, depth_m, types, ...} applied to every design |
 | `snap_tolerance` | number |  |
 | `note` | string |  |
+| `min_keep` | number |  |
+| `allow_heavy_trim` | boolean |  |
+| `allow_island` | boolean |  |
 
 ### `cs2_queue_list`
 

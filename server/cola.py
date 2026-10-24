@@ -78,6 +78,9 @@ def _slim(s):
     return out
 
 
+MIN_KEEP = 0.8        # a staged design keeps at least this share of the segments sent; the rest (errors, loose pieces) is trimmed
+
+
 def add(a, place_roads, rpc=None):
     name = (a.get("name") or "").strip()
     if not name: raise ValueError("name required")
@@ -85,27 +88,50 @@ def add(a, place_roads, rpc=None):
     if any(d["name"] == name for d in q) and not a.get("replace"):
         raise ValueError(f"'{name}' is already staged (replace=true overwrites it, or cs2_queue_remove it)")
     q = [d for d in q if d["name"] != name]
-    keys = {k: v for k, v in a.items() if k not in ("name", "zone", "replace", "note", "hold", "dry_run", "return_segments", "allow_errors", "allow_island", "demolish", "demolish_file")}
+    keys = {k: v for k, v in a.items() if k not in ("name", "zone", "replace", "note", "hold", "dry_run", "return_segments", "allow_errors", "allow_island", "demolish", "demolish_file", "min_keep", "allow_heavy_trim")}
     boxes = a.get("demolish") or []
     if isinstance(boxes, str): boxes = json.loads(boxes)            # some clients send the list as a JSON string
     boxes = [json.loads(b) if isinstance(b, str) else b for b in boxes]
     if a.get("demolish_file"):
         with open(os.path.expanduser(a["demolish_file"])) as fh: boxes = boxes + json.load(fh)
+    keys.setdefault("auto_fix_rounds", 10)                           # staging insists a little more before giving up
+    min_keep = float(a.get("min_keep", MIN_KEEP))
     res = place_roads(dict(keys, dry_run=True, hold=False, return_segments=True, follow_camera=False, zoning_check=False, auto_fix_ignore=boxes or None))
     segs = res.pop("segments_kept", None)
     if res.get("refused") or not segs:
         raise ValueError("nothing to stage: " + str(res.get("refused") or "no segments left after cleaning"))
     if res.get("errors") and not (res.get("auto_fix") or {}).get("clean"):
         raise ValueError(f"the design still has {res.get('errors')} error(s) after auto_fix ({res.get('error_reasons')}); not staged")
-    islands = (res.get("auto_fix") or {}).get("unconnected_groups")
+    af = res.get("auto_fix") or {}
+    original = len(segs) + af.get("dropped_segments", 0)             # segments the caller sent
+    islands = af.get("unconnected_groups")
     if islands is None and rpc is not None and (res.get("auto_fix") is None):          # auto_fix did not run (clean at once): check anyway
         try:
             import autofix
             islands = autofix.islands(rpc, segs) or None
         except Exception: islands = None
+    island_dropped = 0
     if islands and not a.get("allow_island"):
-        raise ValueError(f"the design would be built as an island: {islands} (nothing touches the existing network). Add links to the avenues "
-                         "or pass allow_island=true if it is meant to connect later; not staged")
+        # a good design with a few loose pieces is staged without them (up to 1 - min_keep of the whole); only a mostly-loose one is refused
+        try:
+            import autofix
+            full = autofix.islands(rpc, segs, members=True) if rpc is not None else []
+        except Exception: full = []
+        loose = {i for g in full for i in g.get("indices", [])}
+        left = len(segs) - len(loose)
+        if full and left > 0 and left / max(1, original) >= min_keep:
+            segs = [s for i, s in enumerate(segs) if i not in loose]
+            island_dropped = len(loose)
+            af = dict(af, dropped_segments=af.get("dropped_segments", 0) + island_dropped, kept_segments=len(segs), dropped_island_segments=island_dropped)
+            af.pop("unconnected_groups", None)
+            res["auto_fix"] = af
+        else:
+            raise ValueError(f"the design would be built as an island: {islands} (nothing touches the existing network; keeping the connected part "
+                             f"would leave {left} of {original} segments, under min_keep={min_keep}). Add links to the avenues "
+                             "or pass allow_island=true if it is meant to connect later; not staged")
+    if original and len(segs) / original < min_keep and not a.get("allow_heavy_trim"):
+        raise ValueError(f"auto_fix would remove too much: {original - len(segs)} of {original} segments (keeps {len(segs)}, under min_keep={min_keep}); "
+                         "fix the design, lower min_keep or pass allow_heavy_trim=true; not staged")
     segs = [_slim(s) for s in segs]
     dropped = []
     others = [s for d in q for s in d["segments"]]
@@ -229,6 +255,8 @@ def add_batch(a, place_roads, rpc):
         n = f[:-len("_segments.json")]
         args = {"name": a.get("name_prefix", "") + n, "segments_file": os.path.join(d, f), "snap_tolerance": a.get("snap_tolerance", 4),
                 "zone": a.get("zone"), "replace": True, "note": a.get("note")}
+        for k in ("min_keep", "allow_heavy_trim", "allow_island"):
+            if a.get(k) is not None: args[k] = a[k]
         dem = os.path.join(d, n + "_demoler.json")
         if os.path.exists(dem): args["demolish_file"] = dem
         try:
